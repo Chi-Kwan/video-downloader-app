@@ -1,0 +1,5 @@
+yt-dlp==2026.8.19
+pywebview==6.2.1
+pythonnet==3.1.0
+clr-loader==0.3.1
+PyInstaller==6.22.2

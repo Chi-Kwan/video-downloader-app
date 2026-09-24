@@ -6,11 +6,23 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+import os
 from typing import Callable, Generic, TypeVar
 from urllib.parse import urlparse
 
 
-DATA_ROOT = Path(r"D:\视频下载器数据")
+def _default_data_root() -> Path:
+    configured = os.environ.get("VIDEO_DOWNLOADER_DATA_ROOT")
+    if configured:
+        return Path(configured).expanduser()
+    preferred = Path(r"D:\视频下载器数据")
+    if preferred.drive and Path(preferred.drive + "\\").exists():
+        return preferred
+    local = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    return Path(local) / "视频下载器数据" if local else Path.cwd() / "视频下载器数据"
+
+
+DATA_ROOT = _default_data_root()
 SESSION_ROOT = DATA_ROOT / "site-sessions"
 
 

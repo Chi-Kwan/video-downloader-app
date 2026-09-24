@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, urlparse
 from session_auth import BoundedBackgroundCall, DATA_ROOT, LoginSignals, is_auth_required, session_paths, site_label, with_direct_retry
 from browser_media import PLAYER_SNAPSHOT, validate_snapshot, media_info, video_id
 from share_urls import is_xhs_short, normalize_xhs_url, resolve_xhs_share
+from ffmpeg_runtime import ensure_ffmpeg, locate_ffmpeg, FFMPEG_ARCHIVE_URL, FFMPEG_SOURCE_URL
 
 
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -864,12 +865,21 @@ class DownloaderApp:
                     options['proxy'] = ''
                     self.events.put(('log', f"已识别浏览器当前清晰度：{browser_media['width']}×{browser_media['height']}。"))
                     self.events.put(('status', '正在下载浏览器当前播放的视频…'))
-                try:
-                    import imageio_ffmpeg
+                ffmpeg_path = locate_ffmpeg(DATA_ROOT)
+                if not ffmpeg_path:
+                    self.events.put(("status", "首次使用，正在下载音视频合并组件…"))
+                    self.events.put(("log", "首次需要合并高清音视频，正在从 FFmpeg 发布方下载并校验组件。"))
 
-                    options["ffmpeg_location"] = imageio_ffmpeg.get_ffmpeg_exe()
-                except Exception:
-                    self.events.put(("log", "WARNING: 未定位到内置 FFmpeg，部分高清音视频可能无法合并。"))
+                    def ffmpeg_progress(received: int, total: int) -> None:
+                        if self.cancel_event.is_set():
+                            raise DownloadCancelled("用户取消下载")
+                        if total > 0:
+                            self.events.put(("status", f"正在准备音视频组件 {received * 100 / total:.0f}%…"))
+
+                    ffmpeg_path = ensure_ffmpeg(DATA_ROOT, progress=ffmpeg_progress)
+                    self.events.put(("log", f"FFmpeg 已保存到独立数据目录。二进制来源：{FFMPEG_ARCHIVE_URL}"))
+                    self.events.put(("log", f"对应主项目源码：{FFMPEG_SOURCE_URL}"))
+                options["ffmpeg_location"] = str(ffmpeg_path)
                 def attempt(direct: bool) -> int:
                     if self.cancel_event.is_set():
                         raise DownloadCancelled("用户取消下载")
@@ -1059,20 +1069,14 @@ class DownloaderApp:
 
 
 def self_test(output_path: Path | None = None) -> int:
-    ffmpeg_path = None
-    try:
-        import imageio_ffmpeg
-
-        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-    except Exception:
-        pass
+    ffmpeg_path = locate_ffmpeg(DATA_ROOT)
     result = {
         "python": sys.executable,
         "frozen": FROZEN,
         "yt_dlp": importlib.util.find_spec("yt_dlp") is not None,
-        "imageio_ffmpeg": importlib.util.find_spec("imageio_ffmpeg") is not None,
-        "ffmpeg": ffmpeg_path,
+        "ffmpeg": str(ffmpeg_path) if ffmpeg_path else None,
         "ffmpeg_exists": bool(ffmpeg_path and Path(ffmpeg_path).is_file()),
+        "ffmpeg_mode": "verified-on-demand",
         "tkinter": importlib.util.find_spec("tkinter") is not None,
         "pywebview": importlib.util.find_spec("webview") is not None,
         "default_output": str(default_output()),
@@ -1081,7 +1085,7 @@ def self_test(output_path: Path | None = None) -> int:
         "session_root": str(DATA_ROOT / "site-sessions"),
     }
     result["ok"] = all(
-        result[key] for key in ("yt_dlp", "imageio_ffmpeg", "ffmpeg_exists", "tkinter", "pywebview")
+        result[key] for key in ("yt_dlp", "tkinter", "pywebview")
     )
     rendered = json.dumps(result, ensure_ascii=False, indent=2)
     if output_path:
